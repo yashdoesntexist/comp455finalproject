@@ -3,32 +3,39 @@ import re
 from collections import defaultdict
 
 def mapper(text):
-    words = re.findall(r'\b\w+\b', text.lower())
-    return [(word, 1) for word in words]
+    for w in re.findall(r"\b\w+\b", text.lower()):
+        yield (w, 1)
 
-def reducer(mapped_data):
-    reduced = defaultdict(int)
-    for word, count in mapped_data:
-        reduced[word] += count
-    return reduced
+def reducer(pairs):
+    freq = defaultdict(int)
+    for word, count in pairs:
+        freq[word] += count
+    return freq
 
-def sort_by_frequency(reduced_data):
-    return sorted(reduced_data.items(), key=lambda x: x[1], reverse=True)
+def stream_jsonl(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                yield json.loads(line)
+            except:
+                continue
 
-def run_mapreduce_from_json(file_path, text_key="content"):
-    with open(file_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-    all_mapped = []
-    for record in data:
-        if text_key in record and isinstance(record[text_key], str):
-            all_mapped.extend(mapper(record[text_key]))
-    reduced = reducer(all_mapped)
-    sorted_data = sort_by_frequency(reduced)
-    print("\nTop 20 Most Frequent Words:")
-    for word, freq in sorted_data[:20]:
-        print(f"{word}: {freq}")
-    return sorted_data
+def run_mapreduce(file_path, text_key="text"):
+    mapped = (
+        pair
+        for obj in stream_jsonl(file_path)
+        if text_key in obj and isinstance(obj[text_key], str)
+        for pair in mapper(obj[text_key])
+    )
+    reduced = reducer(mapped)
+    sorted_items = sorted(reduced.items(), key=lambda x: x[1], reverse=True)
+    print("\nTop 20 words:")
+    for w, c in sorted_items[:20]:
+        print(w, c)
+    return sorted_items
 
 if __name__ == "__main__":
-    json_file = "dataset.json"
-    run_mapreduce_from_json(json_file, text_key="content")
+    run_mapreduce("dataset.json")
