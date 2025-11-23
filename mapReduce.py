@@ -1,5 +1,6 @@
 import json
 import re
+import os
 from collections import defaultdict
 
 def mapper(text):
@@ -12,8 +13,8 @@ def reducer(pairs):
         freq[word] += count
     return freq
 
-def stream_jsonl(file_path):
-    with open(file_path, "r", encoding="utf-8") as f:
+def stream_jsonl(path):
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -23,19 +24,26 @@ def stream_jsonl(file_path):
             except:
                 continue
 
-def run_mapreduce(file_path, text_key="text"):
+def iter_all_wiki_files(root_folder):
+    for folder, subdirs, files in os.walk(root_folder):
+        for name in files:
+            if name.startswith("wiki_"):
+                yield os.path.join(folder, name)
+
+def run_mapreduce(root_folder):
     mapped = (
         pair
+        for file_path in iter_all_wiki_files(root_folder)
         for obj in stream_jsonl(file_path)
-        if text_key in obj and isinstance(obj[text_key], str)
-        for pair in mapper(obj[text_key])
+        if "text" in obj and isinstance(obj["text"], str)
+        for pair in mapper(obj["text"])
     )
     reduced = reducer(mapped)
     sorted_items = sorted(reduced.items(), key=lambda x: x[1], reverse=True)
     print("\nTop 20 words:")
-    for w, c in sorted_items[:20]:
-        print(w, c)
+    for word, count in sorted_items[:20]:
+        print(word, count)
     return sorted_items
 
 if __name__ == "__main__":
-    run_mapreduce("dataset.json")
+    run_mapreduce("DATA")
