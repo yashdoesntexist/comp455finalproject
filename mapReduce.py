@@ -2,48 +2,66 @@ import json
 import re
 import os
 from collections import defaultdict
+import boto3
+from dotenv import load_dotenv
+
+load_dotenv()
 
 def mapper(text):
-    for w in re.findall(r"\b\w+\b", text.lower()):
-        yield (w, 1)
+    for token in re.findall(r"\b\w+\b", text.lower()):
+        yield (token, 1)
 
-def reducer(pairs):
-    freq = defaultdict(int)
-    for word, count in pairs:
-        freq[word] += count
-    return freq
+def reducer(counts, pairs):
+    for word, value in pairs:
+        counts[word] += value
+    return counts
 
-def stream_jsonl(path):
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except:
-                continue
+def stream_jsonl_s3(s3, bucket, key):
+    obj = s3.get_object(Bucket=bucket, Key=key)
+    for line in obj["Body"].iter_lines():
+        if not line:
+            continue
+        try:
+            yield json.loads(line)
+        except:
+            continue
 
-def iter_all_wiki_files(root_folder):
-    for folder, subdirs, files in os.walk(root_folder):
-        for name in files:
-            if name.startswith("wiki_"):
-                yield os.path.join(folder, name)
+def iter_s3_files(s3, bucket, prefix):
+    paginator = s3.get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if "wiki_" in key:
+                yield key
 
-def run_mapreduce(root_folder):
-    mapped = (
-        pair
-        for file_path in iter_all_wiki_files(root_folder)
-        for obj in stream_jsonl(file_path)
-        if "text" in obj and isinstance(obj["text"], str)
-        for pair in mapper(obj["text"])
+def run_mapreduce_s3(bucket, prefix):
+    s3 = boto3.client(
+        "s3",
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+        region_name=os.getenv("AWS_DEFAULT_REGION")
     )
-    reduced = reducer(mapped)
-    sorted_items = sorted(reduced.items(), key=lambda x: x[1], reverse=True)
-    print("\nTop 20 words:")
-    for word, count in sorted_items[:20]:
-        print(word, count)
-    return sorted_items
+
+    global_counts = defaultdict(int)
+
+    for key in iter_s3_files(s3, bucket, prefix):
+        print(f"Processing: {key}")
+        mapped_pairs = (
+            pair
+            for record in stream_jsonl_s3(s3, bucket, key)
+            if "text" in record and isinstance(record["text"], str)
+            for pair in mapper(record["text"])
+        )
+        reducer(global_counts, mapped_pairs)
+
+    return sorted(global_counts.items(), key=lambda x: x[1], reverse=True)
 
 if __name__ == "__main__":
-    run_mapreduce("DATA")
+    bucket = "wikidocs455"
+    prefix = ""   
+
+    results = run_mapreduce_s3(bucket, prefix)
+
+    print("\nTop 50 words:")
+    for word, count in results[:50]:
+        print(word, count)
